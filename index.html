@@ -263,6 +263,7 @@ svg.ring{transform:rotate(-90deg);}
    SM-2 ALGORITHM
 ═══════════════════════════════════════ */
 function sm2(card, quality) {
+  // quality: 0=again, 1=hard, 2=good, 3=easy
   let {interval, repetitions, easeFactor} = card;
   
   if (quality < 1) { // Again
@@ -319,6 +320,7 @@ async function save() {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
+      // Salva os dados usando a mesma chave antiga para manter o padrão
       store.put({ words: W, stats: STATS }, 'demo_v3');
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
@@ -359,11 +361,11 @@ let W = [];
 let STATS = {};
 let currentTab = 'study';
 let studySession = null;
-let studyMode = 'flash'; 
+let studyMode = 'flash'; // flash | choice | type | context
 let modalStack = [];
-let wordDisplayLimit = 50; 
+let wordDisplayLimit = 50; // Limite inicial de palavras exibidas
 let confirmCallback = null;
-let autoPlayAudio = false;
+let autoPlayAudio = false;//faz leitura em voz alta
 
 /* ═══════════════════════════════════════
    WORD FACTORY E SINÔNIMOS
@@ -409,7 +411,7 @@ function isDue(card) {
 
 function getStatus(card) {
   if (card.repetitions === 0) return 'new';
-  if (isDue(card)) return 'due';
+  if (isDue(card)) return 'due'; // Esta linha precisa vir antes das próximas!
   if (card.interval <= 1) return 'learning';
   if (card.interval >= 21) return 'mastered';
   return 'review';
@@ -420,6 +422,7 @@ function dueCards() {
 }
 
 function nextIntervals(card) {
+  // Preview what each rating would give
   return [0, 1, 2, 3].map(q => {
     const r = sm2({...card}, q);
     return r.interval;
@@ -429,28 +432,35 @@ function nextIntervals(card) {
 /* ═══════════════════════════════════════
    STUDY SESSION
 ═══════════════════════════════════════ */
+//adapta o modo de estudo para cada palavra
 function getAdaptiveMode(card) {
   const ivl = card.interval;
   const rep = card.repetitions;
   
   if (rep === 0 || ivl <= 3) {
+    // Fase 1 (Reconhecimento): 0 a 3 dias
     const modes = ['flash', 'choice', 'tf'];
     return modes[Math.floor(Math.random() * modes.length)];
   } else if (ivl <= 7) {
+    // Fase 2 (Recuperação Guiada): 4 a 7 dias ✨ NOVO NÍVEL
     const modes = ['revchoice', 'spell'];
     return modes[Math.floor(Math.random() * modes.length)];
   } else if (ivl <= 14) {
+    // Fase 3 (Recuperação Ativa): 8 a 14 dias
     const modes = ['scramble'];
     return modes[Math.floor(Math.random() * modes.length)];
   } else {
+    // Fase 4 (Domínio): 15+ dias
     const modes = ['type', 'context'];
     return modes[Math.floor(Math.random() * modes.length)];
   }
 }
 
+//filtra o estudo inteligente por categoria ou todos
 function startSession(mode, category = '', customArray = null) {
   let due = dueCards();
   
+  // Se o seletor enviou uma categoria, filtra a lista
   if (category && category !== '') {
     due = due.filter(w => w.category === category);
   }
@@ -471,9 +481,9 @@ function startSession(mode, category = '', customArray = null) {
     choiceAnswered: false,
     typeAnswered: false,
     filterCategory: category,
-    customModes: customArray 
+    customModes: customArray // ✨ SALVA OS MODOS QUE VOCÊ MARCOU
   };
-  
+  // Se o áudio automático estiver ligado, aciona na primeira carta
   setTimeout(playQuestionAudio, 200); 
   renderStudy();
 }
@@ -494,7 +504,10 @@ function render() {
   const body = document.getElementById('body');
   if (currentTab === 'study') body.innerHTML = buildStudyTab();
   else if (currentTab === 'words') body.innerHTML = buildWordsTab();
-  else if (currentTab === 'add') body.innerHTML = buildAddTab();
+  else if (currentTab === 'add') {
+    body.innerHTML = buildAddTab();
+    setTimeout(() => { handleTypeChange(); handleImportTypeChange(); }, 50); // ✨ ADICIONE ISTO AQUI!
+  }
   else if (currentTab === 'stats') body.innerHTML = buildStatsTab();
   attachListeners();
 }
@@ -519,7 +532,9 @@ function buildStudyTab() {
   
   let html = '';
 
+  // Due now card
   if (due.length > 0) {
+    // ✨ NOVO: Identifica as categorias disponíveis apenas nos cards que estão vencidos hoje
     const dueCats = [...new Set(due.map(w => w.category).filter(Boolean))];
 
     html += `<div class="card">
@@ -572,6 +587,7 @@ function buildStudyTab() {
     </div>`;
   }
 
+  // Quick stats
   if (W.length > 0) {
     const cats = {};
     W.forEach(w => { cats[w.category || 'geral'] = (cats[w.category || 'geral'] || 0) + 1; });
@@ -591,6 +607,7 @@ function buildStudyTab() {
     </div>`;
   }
 
+  // Daily quote rotation
   const quotes = [
     '"Nada é mais fácil do que enganar a si mesmo." — Demóstenes',
     '"A palavra é a única arma que nunca enferruja." — Proverbio',
@@ -624,14 +641,18 @@ function buildStudyCard() {
   let inner = '';
   let activeMode = studyMode;
 
+  // ✨ SE FOR ADAPTATIVO, ELE CALCULA O MODO IDEAL PARA ESTE CARD ESPECÍFICO
   if (studyMode === 'adaptive') {
     if (!sess.currentAdaptiveMode) {
       sess.currentAdaptiveMode = getAdaptiveMode(card);
     }
     activeMode = sess.currentAdaptiveMode;
-  } else if (studyMode === 'custom') {
+  } 
+  // ✨ SE FOR "SELEÇÕES", SORTEIA APENAS ENTRE OS MODOS QUE VOCÊ MARCOU!
+  else if (studyMode === 'custom') {
     if (!sess.currentAdaptiveMode) {
-      sess.currentAdaptiveMode = sess.customModes[Math.floor(Math.random() * sess.customModes.length)];
+            // Pega um modo aleatório da sua lista de caixinhas marcadas
+            sess.currentAdaptiveMode = sess.customModes[Math.floor(Math.random() * sess.customModes.length)];
     }
     activeMode = sess.currentAdaptiveMode;
   }
@@ -772,6 +793,7 @@ function buildTypeMode(card) {
 function buildContextMode(card) {
   const sess = studySession;
   const answered = sess.contextAnswered;
+  // Build context sentence with blank
   const example = card.example || `Esta palavra significa: ${card.definition}`;
   const blanked = example.replace(new RegExp(card.word, 'gi'), '______');
   
@@ -803,6 +825,7 @@ function buildContextMode(card) {
     </div>`}`;
 }
 
+/* ── MODO: ESCOLHA INVERSA ── */
 function buildRevChoiceMode(card) {
   const sess = studySession;
   if (!sess.revChoices) {
@@ -957,12 +980,14 @@ function buildSpellMode(card) {
   }
   const answered = sess.spellAnswered;
 
-  const ansHtml = sess.spellAnswer.map(id => {
+  // Monta o HTML das letras que o usuário já clicou
+   const ansHtml = sess.spellAnswer.map(id => {
     const item = sess.spellPool.find(p => p.id === id);
     return `<button class="btn gold sm" style="width:38px;height:38px;padding:0;font-size:18px;font-weight:700" onclick="${answered ? '' : `spellRemove(${id})`}">${item.char}</button>`;
   }).join('');
 
-  const availHtml = sess.spellPool.filter(p => !sess.spellAnswer.includes(p.id)).map(item => {
+  // Monta o HTML das letras que ainda estão sobrando no banco
+    const availHtml = sess.spellPool.filter(p => !sess.spellAnswer.includes(p.id)).map(item => {
     return `<button class="btn ghost sm" style="width:38px;height:38px;padding:0;font-size:18px;font-weight:700;border-color:var(--border2)" onclick="${answered ? '' : `spellAdd(${item.id})`}">${item.char}</button>`;
   }).join('');
 
@@ -1004,6 +1029,7 @@ function buildSpellMode(card) {
   `;
 }
 
+// Funções de clique do Modo Letras
 function spellAdd(id) { if(!studySession)return; studySession.spellAnswer.push(id); render(); }
 function spellRemove(id) { if(!studySession)return; studySession.spellAnswer = studySession.spellAnswer.filter(i => i !== id); render(); }
 function spellClear() { if(!studySession)return; studySession.spellAnswer = []; render(); }
@@ -1184,15 +1210,17 @@ function buildWordsTab() {
   const q = (document.getElementById('wordSearch')?.value || '');
   const cat = document.getElementById('wordCat')?.value || '';
   const sort = document.getElementById('wordSort')?.value || 'alpha';
-  
-  const catCounts = {};
+ 
+  // ✨ NOVO: Cria um mapa contando quantas palavras cada categoria tem no léxico inteiro
+    const catCounts = {};
   W.forEach(w => { 
     const c = w.category || 'geral';
     catCounts[c] = (catCounts[c] || 0) + 1; 
   });
   const cats = Object.keys(catCounts).sort();
 
-  setTimeout(updateWordList, 0);
+  // Aciona a atualização da lista apenas após o HTML principal estar na tela
+   setTimeout(updateWordList, 0);
 
   return `
     <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px">
@@ -1223,19 +1251,19 @@ function buildWordsTab() {
 }
 
 function handleSearchInput() {
-  wordDisplayLimit = 15;
+  wordDisplayLimit = 15;// Volta para os primeiros 50 ao pesquisar
   const inp = document.getElementById('wordSearch');
   const btn = document.getElementById('clearSearchBtn');
   if (btn && inp) btn.style.display = inp.value.length > 0 ? 'block' : 'none';
-  updateWordList();
+  updateWordList();// Atualiza SÓ a lista, mantendo o foco no campo de busca!
 }
 
 function clearSearch() {
   const inp = document.getElementById('wordSearch');
   if (inp) {
     inp.value = '';
-    handleSearchInput(); 
-    inp.focus(); 
+    handleSearchInput(); // Atualiza a lista para mostrar tudo de novo
+    inp.focus(); // Devolve o cursor piscando para a barra! 
   }
 }
 
@@ -1245,7 +1273,7 @@ function handleFilterChange() {
 }
 
 function loadMoreWords() {
-  wordDisplayLimit += 15; 
+  wordDisplayLimit += 15; // Aumenta o limite de 50 em 50 
   updateWordList();
 }
 
@@ -1258,7 +1286,8 @@ function updateWordList() {
   const cat = document.getElementById('wordCat')?.value || '';
   const sort = document.getElementById('wordSort')?.value || 'alpha';
 
-  const normalize = (str) => (str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  // Função mágica que remove acentos, 'ç', 'ã', 'é' e transforma em minúsculas
+    const normalize = (str) => (str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const q = normalize(rawQ);
 
   let list = [...W];
@@ -1284,6 +1313,7 @@ function updateWordList() {
     return;
   }
 
+    // Corta a lista para mostrar apenas até o limite atual
   const visibleList = list.slice(0, wordDisplayLimit);
 
   let html = `<div class="card" style="margin-bottom:0">`;
@@ -1302,11 +1332,50 @@ function updateWordList() {
   </div>`).join('');
   html += `</div>`;
 
-  if (list.length > wordDisplayLimit) {
+    // Adiciona o botão "Carregar mais" se ainda houver palavras ocultas
+    if (list.length > wordDisplayLimit) {
     html += `<button class="btn ghost" style="margin-top:12px" onclick="loadMoreWords()">↓ Carregar mais (${list.length - wordDisplayLimit} ocultas)</button>`;
   }
 
   cont.innerHTML = html;
+}
+
+/* ── CONTROLES DINÂMICOS DE INTERFACE ── */
+function handleTypeChange() {
+  const type = document.getElementById('fw_type')?.value;
+  const opt = document.getElementById('fw_optional_fields');
+  const lbl = document.getElementById('lbl_fw_def');
+  const def = document.getElementById('fw_def');
+  
+  if (!type || !opt || !lbl || !def) return;
+  
+  if (type === 'normal') {
+    opt.style.display = 'block';
+    lbl.textContent = 'Definição *';
+    def.placeholder = 'Que não se apaga; permanente; imorredouro.';
+  } else {
+    opt.style.display = 'none'; // Esconde os campos desnecessários!
+    lbl.textContent = `Lista de ${type}s (separados por vírgula) *`;
+    def.placeholder = type === 'sinônimo' ? 'Ex: belo, maravilhoso, deslumbrante' : 'Ex: feio, horrível, pavoroso';
+  }
+}
+
+function handleImportTypeChange() {
+  const type = document.getElementById('importType')?.value;
+  const hint = document.getElementById('importHint');
+  const ta = document.getElementById('importTA');
+  if (!type || !hint || !ta) return;
+
+  if (type === 'normal') {
+    hint.innerHTML = `<b>Formato básico</b> (uma por linha):<br>palavra | definição<br><br><b>Formato completo</b>:<br>palavra | definição | exemplo | sinônimos | categoria<br><br><b>Formato Anki/CSV</b> (tabulação):<br>palavra[tab]definição[tab]exemplo<br><br><span style="color:var(--gold2)">Aviso:</span> Use APENAS a barra reta ( <b>|</b> ) ou tabulação.`;
+    ta.placeholder = `abnegar | renunciar, abrir mão de algo por altruísmo | Ele decidiu abnegar seus privilégios.\neloquência | arte de falar com efeito e beleza | Sua eloquência encantou a plateia`;
+  } else if (type === 'sinônimo') {
+    hint.innerHTML = `<b>Formato para Sinônimos</b>:<br>palavra | sinônimo1, sinônimo2, sinônimo3<br><br><b>Exemplo Prático:</b><br>Lindo | belo, maravilhoso, deslumbrante<br><br><span style="color:var(--gold2)">Dica:</span> Como você já selecionou a opção acima, não precisa colocar o "s |" no início!`;
+    ta.placeholder = `Lindo | belo, maravilhoso, deslumbrante\nInteligente | sagaz, astuto, brilhante`;
+  } else if (type === 'antônimo') {
+    hint.innerHTML = `<b>Formato para Antônimos</b>:<br>palavra | antônimo1, antônimo2, antônimo3<br><br><b>Exemplo Prático:</b><br>Quente | frio, gelado, congelante<br><br><span style="color:var(--gold2)">Dica:</span> Como você já selecionou a opção acima, não precisa colocar o "a |" no início!`;
+    ta.placeholder = `Quente | frio, gelado, congelante\nRápido | lento, devagar, moroso`;
+  }
 }
 
 /* ── ADD TAB ── */
@@ -1324,19 +1393,30 @@ function buildAddTab() {
     <div class="card">
       <div class="card-head"><div class="card-title">📥 Importação em Massa</div></div>
       <div class="card-body">
-        <div class="format-hint">
+        
+        <div class="form-group">
+          <label class="lbl">O que você vai importar?</label>
+          <select class="inp" id="importType" style="border-color:var(--gold2);color:var(--gold2)" onchange="handleImportTypeChange()">
+            <option value="normal">📖 Importar: Palavras Normais</option>
+            <option value="sinônimo">🔗 Importar: Sinônimos</option>
+            <option value="antônimo">⚖️ Importar: Antônimos</option>
+          </select>
+        </div>
+
+        <div class="format-hint" id="importHint">
           <b>Formato básico</b> (uma por linha):<br>
           palavra | definição<br><br>
-          <b>Formato de Sinônimos/Antônimos</b>:<br>
-          s | palavra | sinonimo1, sinonimo2, etc<br>
-          a | palavra | antonimo1, antonimo2, etc<br><br>
+          <b>Formato completo</b>:<br>
+          palavra | definição | exemplo | sinônimos | categoria<br><br>
+          <b>Formato Anki/CSV</b> (tabulação):<br>
+          palavra[tab]definição[tab]exemplo<br><br>
           <span style="color:var(--gold2)">Aviso:</span> Use APENAS a barra reta ( <b>|</b> ) ou tabulação para separar os itens.
         </div>
+        
         <div class="form-group">
           <label class="lbl">Cole suas palavras aqui</label>
-          <textarea class="ta" id="importTA" rows="8" placeholder="s | Lindo | belo, maravilhoso, deslumbrante
-a | Quente | frio, gelado
-abnegar | renunciar, abrir mão de algo por altruísmo"></textarea>
+          <textarea class="ta" id="importTA" rows="8" placeholder="abnegar | renunciar, abrir mão de algo por altruísmo | Ele decidiu abnegar seus privilégios.
+eloquência | arte de falar com efeito e beleza | Sua eloquência encantou a plateia"></textarea>
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
           <select class="inp" id="importLangWord" style="flex:1;min-width:120px">
@@ -1387,15 +1467,13 @@ abnegar | renunciar, abrir mão de algo por altruísmo"></textarea>
 
 function buildWordForm(word) {
   const w = word || {};
-  
+  // ✨ NOVO: Puxa as categorias padrão E as categorias customizadas que já existem no seu banco
   const defaultCats = ['geral','retórica','filosofia','literatura','erudição','dialética','jurídico','política','ciência','cotidiano'];
   const existingCats = W.map(x => x.category).filter(Boolean);
-  
+  // Junta tudo, remove as duplicadas e coloca em ordem alfabética
   const cats = [...new Set([...defaultCats, ...existingCats])].sort();
-
-  if (w.category && !cats.includes(w.category)) {
-    cats.push(w.category);
-  }
+  // Se por acaso a palavra tiver uma categoria isolada, garante que ela apareça
+  if (w.category && !cats.includes(w.category)) cats.push(w.category);
   
   const classes = ['','substantivo','verbo','adjetivo','advérbio','expressão','locução'];
   const langs = [['pt-BR','Português'],['en-US','Inglês'],['es-ES','Espanhol'],['fr-FR','Francês'],['de-DE','Alemão'],['it-IT','Italiano']];
@@ -1404,7 +1482,7 @@ function buildWordForm(word) {
     <div style="display:flex;gap:8px;margin-bottom:14px">
       <div class="form-group" style="flex:1;margin:0">
         <label class="lbl">Tipo de Card</label>
-        <select class="inp" id="fw_type" style="border-color:var(--gold2);color:var(--gold2)">
+        <select class="inp" id="fw_type" style="border-color:var(--gold2);color:var(--gold2)" onchange="handleTypeChange()">
           <option value="normal" ${(w.cardType||'normal')==='normal'?'selected':''}>📖 Palavra Normal</option>
           <option value="sinônimo" ${(w.cardType)==='sinônimo'?'selected':''}>🔗 Sinônimos</option>
           <option value="antônimo" ${(w.cardType)==='antônimo'?'selected':''}>⚖️ Antônimos</option>
@@ -1430,23 +1508,33 @@ function buildWordForm(word) {
       <input class="inp" id="fw_word" value="${esc(w.word||'')}" placeholder="Ex: indelével" autocomplete="off" autocorrect="off">
     </div>
     <div class="form-group">
-      <label class="lbl">Definição / Lista de sinônimos *</label>
-      <textarea class="ta" id="fw_def" style="min-height:70px" placeholder="Se for sinônimo, separe por vírgula. Ex: belo, bonito">${esc(w.definition||'')}</textarea>
+      <label class="lbl" id="lbl_fw_def">Definição *</label>
+      <textarea class="ta" id="fw_def" style="min-height:70px" placeholder="Que não se apaga; permanente; imorredouro.">${esc(w.definition||'')}</textarea>
     </div>
-    <div class="form-group">
-      <label class="lbl">Exemplo de uso</label>
-      <textarea class="ta" id="fw_ex" style="min-height:60px" placeholder="Sua memória deixou uma marca indelével na história.">${esc(w.example||'')}</textarea>
-    </div>
-    <div style="display:flex;gap:8px">
-      <div class="form-group" style="flex:1">
-        <label class="lbl">Sinônimos extras</label>
-        <input class="inp" id="fw_syn" value="${esc(w.synonyms||'')}" placeholder="permanente, eterno">
+    
+    <div id="fw_optional_fields" style="display:${w.cardType === 'sinônimo' || w.cardType === 'antônimo' ? 'none' : 'block'}">
+      <div class="form-group">
+        <label class="lbl">Exemplo de uso</label>
+        <textarea class="ta" id="fw_ex" style="min-height:60px" placeholder="Sua memória deixou uma marca indelével na história.">${esc(w.example||'')}</textarea>
       </div>
-      <div class="form-group" style="flex:1">
-        <label class="lbl">Fonética</label>
-        <input class="inp" id="fw_ph" value="${esc(w.phonetic||'')}" placeholder="in-de-LÉ-vel">
+      <div style="display:flex;gap:8px">
+        <div class="form-group" style="flex:1">
+          <label class="lbl">Sinônimos extras</label>
+          <input class="inp" id="fw_syn" value="${esc(w.synonyms||'')}" placeholder="permanente, eterno">
+        </div>
+        <div class="form-group" style="flex:1">
+          <label class="lbl">Fonética</label>
+          <input class="inp" id="fw_ph" value="${esc(w.phonetic||'')}" placeholder="in-de-LÉ-vel">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="lbl">Classe gramatical</label>
+        <select class="inp" id="fw_class">
+          ${classes.map(c => `<option value="${c}" ${(w.wordClass||'')===c?'selected':''}>${c||'—'}</option>`).join('')}
+        </select>
       </div>
     </div>
+    
     <div style="display:flex;gap:8px">
       <div class="form-group" style="flex:1">
         <label class="lbl">Categoria</label>
@@ -1455,15 +1543,9 @@ function buildWordForm(word) {
         </select>
       </div>
       <div class="form-group" style="flex:1">
-        <label class="lbl">Classe gramatical</label>
-        <select class="inp" id="fw_class">
-          ${classes.map(c => `<option value="${c}" ${(w.wordClass||'')===c?'selected':''}>${c||'—'}</option>`).join('')}
-        </select>
+        <label class="lbl">Tags</label>
+        <input class="inp" id="fw_tags" value="${esc(w.tags||'')}" placeholder="nível-c2, formal, política">
       </div>
-    </div>
-    <div class="form-group">
-      <label class="lbl">Tags (separadas por vírgula)</label>
-      <input class="inp" id="fw_tags" value="${esc(w.tags||'')}" placeholder="nível-c2, formal, política">
     </div>`;
 }
 
@@ -1476,6 +1558,7 @@ function buildStatsTab() {
   const totalRev = STATS.totalReviews || 0;
   const days = [...new Set((STATS.history||[]).map(h => h.date))].length;
   
+  // 30-day history
   const last30 = [];
   for (let i = 29; i >= 0; i--) {
     const d = new Date(); 
@@ -1486,6 +1569,7 @@ function buildStatsTab() {
     last30.push({date: dt, done, isToday: i === 0});
   }
 
+  // Category breakdown
   const catMap = {};
   W.forEach(w => { catMap[w.category||'geral'] = (catMap[w.category||'geral']||0) + 1; });
 
@@ -1565,8 +1649,8 @@ function saveNewWord() {
     example: gv('fw_ex'), synonyms: gv('fw_syn'),
     phonetic: gv('fw_ph'), category: gv('fw_cat'),
     wordClass: gv('fw_class'), tags: gv('fw_tags'),
-    langWord: gv('fw_lang_word'), 
-    langDef: gv('fw_lang_def'),
+    langWord: gv('fw_lang_word'),  // ✨ CAPTURA IDIOMA DA PALAVRA
+    langDef: gv('fw_lang_def'), // ✨ CAPTURA IDIOMA DA DEFINIÇÃO
     cardType: gv('fw_type') // ✨ SALVA O TIPO
   });
   W.push(card);
@@ -1579,30 +1663,37 @@ function saveNewWord() {
 function importWords() {
   const raw = document.getElementById('importTA')?.value || '';
   const dropdownCat = document.getElementById('importCat')?.value || 'geral'; 
+  const dropdownType = document.getElementById('importType')?.value || 'normal'; // ✨ Lê o tipo selecionado
   const langWord = document.getElementById('importLangWord')?.value || 'pt-BR'; 
   const langDef = document.getElementById('importLangDef')?.value || 'pt-BR'; 
   const lines = raw.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
   let added = 0, skipped = 0;
   
   lines.forEach(line => {
+    // Nova regra: separa APENAS por '|' ou Tabulação (\t)
     const parts = line.split(/\s*\|\s*|\t/).map(p => p.trim());
     if (parts.length < 2) { skipped++; return; }
 
-    let cType = 'normal';
+    let cType = dropdownType; // Assume o tipo do seletor como padrão
     let word = '';
     let def = '';
     let catFinal = dropdownCat;
 
-    // ✨ INTELIGÊNCIA DE SINÔNIMOS/ANTÔNIMOS
     const firstToken = parts[0].toLowerCase();
+    // Preserva a inteligência antiga se você digitar "s |" ou "a |" manualmente
     if (firstToken === 's' || firstToken === 'a') {
       cType = firstToken === 's' ? 'sinônimo' : 'antônimo';
       word = parts[1];
-      def = parts.slice(2).filter(Boolean).join(', '); // Junta todos os sinônimos
+      def = parts.slice(2).filter(Boolean).join(', ');
     } else {
       word = parts[0];
-      def = parts[1];
-      catFinal = parts[4] || dropdownCat;
+      // Se você marcou Sinônimo/Antônimo no select, junta tudo o que vier depois da barra!
+      if (cType === 'sinônimo' || cType === 'antônimo') {
+         def = parts.slice(1).filter(Boolean).join(', ');
+      } else {
+         def = parts[1];
+         catFinal = parts[4] || dropdownCat;
+      }
     }
     
     if (!word || !def) { skipped++; return; }
@@ -1613,10 +1704,10 @@ function importWords() {
       definition: def,
       example: parts[2] || '',
       synonyms: parts[3] || '',
-      category: catFinal, 
-      langWord: langWord, 
-      langDef: langDef,   
-      cardType: cType // ✨ SALVA O TIPO
+      category: catFinal,  // Usa a categoria decidida acima
+      langWord: langWord, // ✨
+      langDef: langDef, // ✨   
+      cardType: cType 
     }));
     added++;
   });
@@ -1637,6 +1728,7 @@ function previewImport() {
   if (!lines.length) { prev.innerHTML = ''; return; }
   
   const items = lines.slice(0, 5).map(line => {
+        // Usa a mesma regra de separação nova: '|' ou Tab
     const parts = line.split(/\s*\|\s*|\t/).map(p => p.trim());
     return `<div style="padding:6px 0;border-bottom:1px solid var(--border)"><span style="color:var(--gold2);font-family:'Cinzel',serif">${esc(parts[0]||'')}</span> — <span style="font-style:italic;color:var(--stone2)">${esc(parts[1]||'')}</span></div>`;
   }).join('');
@@ -1741,6 +1833,20 @@ function openAddModal() {
       <button class="btn gold" onclick="saveModalWord()">✦ Adicionar</button>
       <button class="btn ghost sm" onclick="closeModal()">Cancelar</button>
     </div>`);
+  setTimeout(handleTypeChange, 50); // ✨ ADICIONE ISTO AQUI!
+}
+/* ── SELEÇÃO CUSTOMIZADA DE MODOS ── */
+function openEditModal(id) {
+  const w = W.find(x => x.id === id);
+  if (!w) return;
+  openModal(`
+    <h3>✏ Editar Palavra</h3>
+    ${buildWordForm(w)}
+    <div class="btn-row">
+      <button class="btn gold" onclick="saveEditWord('${id}')">💾 Salvar</button>
+      <button class="btn ghost sm" onclick="closeModal()">Cancelar</button>
+    </div>`);
+  setTimeout(handleTypeChange, 50); // ✨ ADICIONE ISTO AQUI!
 }
 
 function openCustomModal() {
@@ -1771,6 +1877,7 @@ function openCustomModal() {
 }
 
 function startCustomSession(cat) {
+  // Pega todas as caixinhas que estão marcadas (checked)
   const cbs = document.querySelectorAll('.custom-mode-cb:checked');
   const selectedModes = Array.from(cbs).map(cb => cb.value);
   
@@ -1780,6 +1887,7 @@ function startCustomSession(cat) {
   }
   
   closeModal();
+  // Inicia passando a matriz de modos escolhidos!
   startSession('custom', cat, selectedModes);
 }
 
@@ -1791,24 +1899,13 @@ function saveModalWord() {
     example: gv('fw_ex'), synonyms: gv('fw_syn'),
     phonetic: gv('fw_ph'), category: gv('fw_cat'),
     wordClass: gv('fw_class'), tags: gv('fw_tags'),
-    langWord: gv('fw_lang_word'),
-    langDef: gv('fw_lang_def'),
+    langWord: gv('fw_lang_word'), // ✨ CAPTURA IDIOMA DA PALAVRA
+    langDef: gv('fw_lang_def'), // ✨ CAPTURA IDIOMA DA DEFINIÇÃO
     cardType: gv('fw_type') // ✨
   }));
   save(); closeModal(); toast(`"${word}" adicionada!`, 'gold'); render();
 }
 
-function openEditModal(id) {
-  const w = W.find(x => x.id === id);
-  if (!w) return;
-  openModal(`
-    <h3>✏ Editar Palavra</h3>
-    ${buildWordForm(w)}
-    <div class="btn-row">
-      <button class="btn gold" onclick="saveEditWord('${id}')">💾 Salvar</button>
-      <button class="btn ghost sm" onclick="closeModal()">Cancelar</button>
-    </div>`);
-}
 
 function saveEditWord(id) {
   const idx = W.findIndex(w => w.id === id);
@@ -1820,15 +1917,15 @@ function saveEditWord(id) {
     example: gv('fw_ex'), synonyms: gv('fw_syn'),
     phonetic: gv('fw_ph'), category: gv('fw_cat'),
     wordClass: gv('fw_class'), tags: gv('fw_tags'),
-    langWord: gv('fw_lang_word'), 
-    langDef: gv('fw_lang_def'),
+    langWord: gv('fw_lang_word'), // ✨ ATUALIZA IDIOMA DA PALAVRA 
+    langDef: gv('fw_lang_def'), // ✨ ATUALIZA IDIOMA DA DEFINIÇÃO
     cardType: gv('fw_type') // ✨
   });
   save(); closeModal(); toast('Palavra atualizada!', 'ok'); render();
 }
 
 function openConfirmModal(msg, onConfirm) {
-  confirmCallback = onConfirm; 
+  confirmCallback = onConfirm; // Salva a função na memória com o ID correto 
   openModal(`
     <h3>Confirmar</h3>
     <div style="font-size:15px;color:var(--ink2);line-height:1.7;margin:8px 0">${esc(msg)}</div>
@@ -1890,6 +1987,7 @@ function today() {
 function statusLabel(s) {
   return {new:'Novo',learning:'Aprendendo',review:'Revisão',due:'Para revisar',mastered:'Dominado'}[s]||s;
 }
+// Atualize a modeLabel:
 function modeLabel(m) {
   return {
     flash:'Flashcard', choice:'Múltipla escolha', type:'Digitação', context:'Contexto',
@@ -1925,7 +2023,9 @@ function updateStreak() {
   else STATS.streak = 1;
   STATS.lastStudy = Date.now();
 }
-function attachListeners() {}
+function attachListeners() {
+  // nothing extra needed — all via inline handlers
+  }
 function renderStudy() {
   currentTab = 'study';
   document.querySelectorAll('.tab').forEach(el => el.classList.toggle('on', el.dataset.tab === 'study'));
@@ -1933,7 +2033,7 @@ function renderStudy() {
 }
 
 function ouvirPalavra(texto, lang = 'pt-BR') {
-  window.speechSynthesis.cancel(); 
+  window.speechSynthesis.cancel();  // Corta a voz anterior se você clicar rápido
   const fala = new SpeechSynthesisUtterance(texto);
   fala.lang = lang;
   fala.rate = 0.9;
@@ -1949,6 +2049,7 @@ function toggleAudio() {
   }
   toast(autoPlayAudio ? 'Leitura Automática: ON' : 'Leitura Automática: OFF', autoPlayAudio ? 'gold' : 'err');
   
+  // Se ligou o áudio no meio da tela de estudo, já lê a pergunta atual
   if (autoPlayAudio && studySession && !studySession.flipped && !studySession.choiceAnswered && !studySession.tfAnswered && !studySession.typeAnswered && !studySession.revChoiceAnswered && !studySession.scrambleAnswered && !studySession.contextAnswered) {
     playQuestionAudio();
   }
@@ -1960,9 +2061,12 @@ function playQuestionAudio() {
   if (!card) return;
   
   const mode = studySession.currentAdaptiveMode || studyMode;
+  // Modos onde a pergunta exibida é a PALAVRA
   if (mode === 'flash' || mode === 'choice' || mode === 'tf') {
     ouvirPalavra(card.word, card.langWord || 'pt-BR');
-  } else {
+  }
+  // Modos onde a pergunta exibida é a DEFINIÇÃO
+   else {
     ouvirPalavra(card.definition, card.langDef || 'pt-BR');
   }
 }
@@ -1973,18 +2077,20 @@ function playAnswerAudio() {
   if (!card) return;
   
   const mode = studySession.currentAdaptiveMode || studyMode;
-  if (mode === 'flash' || mode === 'choice') {
+  // Modos onde a resposta descoberta é a DEFINIÇÃO
+    if (mode === 'flash' || mode === 'choice') {
     ouvirPalavra(card.definition, card.langDef || 'pt-BR');
-  } else {
+  } 
+    // Modos onde a resposta descoberta é a PALAVRA
+  else {
     ouvirPalavra(card.word, card.langWord || 'pt-BR');
   }
 }
-
 /* ═══════════════════════════════════════
    INIT
 ═══════════════════════════════════════ */
 (async function init() {
-  await load(); 
+  await load(); // ✨ ADICIONE A PALAVRA "await" AQUI 
   await new Promise(r => setTimeout(r, 900));
   document.getElementById('loading').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
