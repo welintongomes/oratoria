@@ -720,14 +720,36 @@ function buildChoiceMode(card) {
     const valids = getValidAnswers(card);
     const isRel = card.cardType === 'sinônimo' || card.cardType === 'antônimo';
     
+    // Pega as opções válidas
     sess.validChoices = valids.sort(() => Math.random() - 0.5).slice(0, isRel ? 3 : 1);
-    
     const totalOptions = isRel ? 6 : 4;
-    const others = W.filter(w => w.id !== card.id).flatMap(w => getValidAnswers(w));
-    const wrongs = others.sort(() => Math.random() - 0.5).slice(0, totalOptions - sess.validChoices.length);
     
+    // ✨ INTELIGÊNCIA: Filtra o banco para puxar erradas do mesmo tipo!
+    let othersCards = W.filter(w => w.id !== card.id);
+    if (isRel) {
+      // Se for sinônimo, só pega respostas erradas de outros sinônimos
+      othersCards = othersCards.filter(w => w.cardType === 'sinônimo' || w.cardType === 'antônimo');
+    } else {
+      // Se for normal, só pega frases de outras cartas normais
+      othersCards = othersCards.filter(w => w.cardType === 'normal' || !w.cardType);
+    }
+    
+    let others = othersCards.flatMap(w => getValidAnswers(w));
+    
+    // Segurança: se você não tiver palavras suficientes do mesmo tipo cadastradas ainda, ele improvisa com outras palavras curtas
+    if (isRel && others.length < totalOptions) {
+      others = [...others, ...W.filter(w => w.id !== card.id).map(w => w.word)];
+    } else if (!isRel && others.length < totalOptions) {
+      others = [...others, ...W.filter(w => w.id !== card.id).map(w => w.definition)];
+    }
+    
+    // Remove duplicatas e respostas que já sejam a correta
+    others = [...new Set(others)].filter(opt => !sess.validChoices.includes(opt));
+    
+    const wrongs = others.sort(() => Math.random() - 0.5).slice(0, totalOptions - sess.validChoices.length);
     sess.choices = [...sess.validChoices, ...wrongs].sort(() => Math.random() - 0.5);
   }
+  
   const answered = sess.choiceAnswered;
   const typeLbl = card.cardType === 'sinônimo' ? 'Selecione um SINÔNIMO para:' : (card.cardType === 'antônimo' ? 'Selecione um ANTÔNIMO para:' : 'Qual a definição de:');
 
@@ -826,21 +848,34 @@ function buildContextMode(card) {
 }
 
 /* ── MODO: ESCOLHA INVERSA ── */
+
 function buildRevChoiceMode(card) {
   const sess = studySession;
   if (!sess.revChoices) {
-    const others = W.filter(w => w.id !== card.id);
-    const shuffled = others.sort(() => Math.random() - .5).slice(0, 3);
+    const isRel = card.cardType === 'sinônimo' || card.cardType === 'antônimo';
+    
+    // ✨ INTELIGÊNCIA: Também tenta puxar opções erradas do mesmo contexto
+    let othersCards = W.filter(w => w.id !== card.id);
+    if (isRel) {
+        othersCards = othersCards.filter(w => w.cardType === 'sinônimo' || w.cardType === 'antônimo');
+    } else {
+        othersCards = othersCards.filter(w => w.cardType === 'normal' || !w.cardType);
+    }
+    
+    // Se faltarem cartas no banco para misturar, pega de qualquer tipo
+    if (othersCards.length < 3) othersCards = W.filter(w => w.id !== card.id);
+    
+    const shuffled = othersCards.sort(() => Math.random() - .5).slice(0, 3);
     sess.revChoices = [...shuffled.map(w => w.word), card.word].sort(() => Math.random() - .5);
     
-    // ✨ Se for sinônimo, escolhe um dos sinônimos para mostrar na tela como pergunta
     let def = card.definition;
-    if (card.cardType === 'sinônimo' || card.cardType === 'antônimo') {
+    if (isRel) {
        const valids = getValidAnswers(card);
        def = valids[Math.floor(Math.random() * valids.length)];
     }
     sess.revChoicePrompt = def;
   }
+  
   const answered = sess.revChoiceAnswered;
   const isRel = card.cardType === 'sinônimo' || card.cardType === 'antônimo';
 
@@ -873,17 +908,39 @@ function buildRevChoiceMode(card) {
     </div>` : ''}`;
 }
 
+//modo verdadeiro ou falso
 function buildTFMode(card) {
   const sess = studySession;
   if (!sess.tfSetup) {
     const isCorrect = Math.random() > 0.5;
-    let def = card.definition;
+    let def = '';
+    const isRel = card.cardType === 'sinônimo' || card.cardType === 'antônimo';
+    
+    // Pega a resposta correta (se for sinônimo, sorteia UMA palavra da lista)
+    const correctAnswers = getValidAnswers(card);
+    const correctDef = isRel ? correctAnswers[Math.floor(Math.random() * correctAnswers.length)] : card.definition;
+
     if (!isCorrect && W.length > 1) {
-      const others = W.filter(w => w.id !== card.id && w.definition);
-      def = others[Math.floor(Math.random() * others.length)]?.definition || card.definition;
-      sess.tfIsCorrect = def === card.definition;
+      let othersCards = W.filter(w => w.id !== card.id);
+      
+      // ✨ INTELIGÊNCIA: Se for mentira, mente com algo do mesmo tipo!
+      if (isRel) {
+          othersCards = othersCards.filter(w => w.cardType === 'sinônimo' || w.cardType === 'antônimo');
+      } else {
+          othersCards = othersCards.filter(w => w.cardType === 'normal' || !w.cardType);
+      }
+      
+      let others = othersCards.flatMap(w => getValidAnswers(w));
+      
+      // Improvisa caso falte conteúdo no banco
+      if (isRel && others.length === 0) others = W.filter(w => w.id !== card.id).map(w => w.word);
+      else if (!isRel && others.length === 0) others = W.filter(w => w.id !== card.id).map(w => w.definition);
+      
+      def = others[Math.floor(Math.random() * others.length)] || correctDef;
+      sess.tfIsCorrect = def === correctDef;
     } else {
       sess.tfIsCorrect = true;
+      def = correctDef;
     }
     sess.tfDefinition = def;
     sess.tfSetup = true;
@@ -894,7 +951,7 @@ function buildTFMode(card) {
     <div class="card" style="margin-bottom:12px;border:2px solid ${answered ? (sess.tfUserCorrect ? 'var(--green)' : 'var(--red)') : 'var(--border)'}">
       <div class="card-body" style="text-align:center;padding:24px 16px">
         <div class="fc-word" style="font-size:32px;margin-bottom:16px">${esc(card.word)}</div>
-        <div style="font-size:13px;color:var(--stone2);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Significa:</div>
+        <div style="font-size:13px;color:var(--stone2);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${card.cardType === 'sinônimo' ? 'Tem como sinônimo:' : 'Significa:'}</div>
         <div class="fc-definition" style="font-size:18px;">"${esc(sess.tfDefinition)}"</div>
       </div>
     </div>
@@ -906,7 +963,7 @@ function buildTFMode(card) {
     <div class="type-result ${sess.tfUserCorrect ? 'ok' : 'fail'}" style="margin-bottom:10px">
       ${sess.tfUserCorrect ? '✓ Acertou!' : `✗ Errou. A resposta era <b>${sess.tfIsCorrect ? 'Verdadeiro' : 'Falso'}</b>.`}
     </div>
-    ${!sess.tfIsCorrect && !sess.tfUserCorrect ? `<div class="quote" style="margin-bottom:10px">Definição real: ${esc(card.definition)}</div>` : ''}
+    ${!sess.tfIsCorrect && !sess.tfUserCorrect ? `<div class="quote" style="margin-bottom:10px">${card.cardType === 'sinônimo' ? 'Sinônimos reais:' : 'Definição real:'} ${esc(card.definition)}</div>` : ''}
     <div class="rating-row">
       <button class="rating-btn r1" onclick="rateCard(0)"><span class="rating-lbl">De novo</span></button>
       <button class="rating-btn r${sess.tfUserCorrect ? '4' : '2'}" onclick="rateCard(${sess.tfUserCorrect ? 3 : 1})">
